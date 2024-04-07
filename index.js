@@ -37,7 +37,7 @@ function fillPolygon(points){
 class MarchingField {
 	constructor(){
 		this.res = 10;
-		this.debug = false;
+		this.debug = true;
 		const { width, height } = canvas.getBoundingClientRect();
 		this.H = height / this.res + 1; this.W = width / this.res + 1;
 		this.arr = Array.from(Array(this.H), () => new Array(this.W));//A value of 0 = all air, a value of 1 = all dirt
@@ -48,6 +48,8 @@ class MarchingField {
 		this.eggs = []; //list that contains references for only eggs
 		this.foods = []; //list that contains references for only food items
 		this.pheromones = []; //list that contains references for ant pheromones
+		
+		this.timer = {physics1 : getNewTime()} //object containing timer values
 		
 		this.threshold = 0.5;
 		for (let i = 0; i < this.H; i++){
@@ -62,6 +64,124 @@ class MarchingField {
 				}
 				this.arr[i][j] = v;
 			}
+		}
+	}
+	defineSurfaceEquations(i, j){
+		const yPos = i * this.res;
+		const xPos = j * this.res;
+		//let square = [arr[i][j], arr[i][j + 1], arr[i + 1][j + 1], arr[i + 1][j]];
+		
+		const luWeight = Math.abs(this.arr[i][j] - 0.5);
+		const ruWeight = Math.abs(this.arr[i][j + 1] - 0.5);
+		const rdWeight = Math.abs(this.arr[i + 1][j + 1] - 0.5);
+		const ldWeight = Math.abs(this.arr[i + 1][j] - 0.5);	
+		
+		const lu = [yPos, xPos];
+		const ru = [yPos, xPos + this.res];
+		const rd = [yPos + this.res, xPos + this.res];
+		const ld = [yPos + this.res, xPos];
+		
+		const offsetA = luWeight / (luWeight + ruWeight) * this.res; //upperLeft ---> upperRight
+		const offsetB = ruWeight / (ruWeight + rdWeight) * this.res; //upperRight ---> lowerRight
+		const offsetC = ldWeight / (ldWeight + rdWeight) * this.res; //lowerLeft ---> lowerRight
+		const offsetD = luWeight / (luWeight + ldWeight) * this.res; //upperLeft ---> lowerleft
+		
+		const index = getState(this.arr[i][j], this.arr[i][j + 1], this.arr[i + 1][j + 1], this.arr[i + 1][j]);
+		
+		const res = this.res;
+		switch (index){
+			case 0:
+				return function(offsetX, offsetY){return false};
+			case 1:
+				//joinLine(c, d)
+				return function(offsetX, offsetY){
+					const slope = (res - offsetD) / offsetC;
+					return offsetY - offsetD > slope * offsetX;
+				};
+			case 2:
+				//joinLine(b, c);
+				return function(offsetX, offsetY){
+					const slope = (offsetB - res) / (res - offsetC);
+					return offsetY - offsetB > slope * (offsetX - res);
+				};
+			case 3:
+				//joinLine(b, d);
+				return function(offsetX, offsetY){
+					const slope = (offsetB - offsetD) / res;
+					return offsetY - offsetD > slope * offsetX
+				};
+			case 4:
+				//joinLine(a, b);
+				return function(offsetX, offsetY){
+					const slope = offsetB / (res - offsetA);
+					return offsetY - offsetB < slope * (offsetX - res);
+				};
+			case 5:
+				//joinLine(a, d);
+				//joinLine(b, c);
+				return function(offsetX, offsetY){
+					const slope1 = -offsetD / offsetA;
+					const slope2 = offsetB / (offsetC - res);
+					return (offsetY - offsetD > slope1 * offsetA) && (offsetY - offsetB < slope2 * (offsetX - res));
+				}
+			case 6:
+				//joinLine(a, c);
+				return function(offsetX, offsetY){
+					const revslope = (offsetC - offsetA) / res;
+					return offsetX - offsetA > revslope * offsetY; 
+				}
+			case 7:
+				//joinLine(a, d);
+				return function(offsetX, offsetY){
+					const slope = -offsetD / offsetA;
+					return offsetY - offsetD > slope * offsetA;
+				};
+			case 8:
+				//joinLine(a, d);
+				return function(offsetX, offsetY){
+					const slope = -offsetD / offsetA;
+					return offsetY - offsetD < slope * offsetA;
+				};
+			case 9:
+				//joinLine(a, c);
+				return function(offsetX, offsetY){
+					const revslope = (offsetC - offsetA) / res;
+					return offsetX - offsetA < revslope * offsetY; 
+				}
+			case 10:
+				//joinLine(a, b);
+				//joinLine(c, d);
+				return function(offsetX, offsetY){
+					const slope1 = offsetB / (res - offsetA);
+					const slope2 = (res - offsetD) / offsetC;
+					return (offsetY - offsetB > slope1 * (offsetX - res)) && (offsetY - offsetD < slope2 * offsetX);
+				}
+			case 11:
+				//joinLine(a, b);
+				return function(offsetX, offsetY){
+					const slope = offsetB / (res - offsetA);
+					return offsetY - offsetB > slope * (offsetX - res);
+				};
+			case 12:
+				//joinLine(b, d);
+				return function(offsetX, offsetY){
+					const slope = (offsetB - offsetD) / res;
+					return offsetY - offsetD < slope * offsetX
+				};
+			case 13:
+				//joinLine(b, c);
+				return function(offsetX, offsetY){
+					const slope = (offsetB - res) / (res - offsetC);
+					return offsetY - offsetB < slope * (offsetX - res);
+				};
+			case 14:
+				//joinLine(c, d)
+				return function(offsetX, offsetY){
+					const slope = (res - offsetD) / offsetC;
+					return offsetY - offsetD < slope * offsetX;
+				};
+			case 15:
+				return function(offsetX, offsetY){return true};
 		}
 	}
 	draw(color){
@@ -203,6 +323,11 @@ class MarchingField {
 			}
 		}
 		ctx.restore();
+		
+		for (const ant of this.ants){
+			ant.draw();
+		}
+		
 	}
 	addMaterial(xpos, ypos, radius){
 		const kindacenter = [ypos / this.res, xpos / this.res];
@@ -230,28 +355,140 @@ class MarchingField {
 			return this.arr[indexY][indexX] - 1.0;
 		}
 	}
-}
-
-class PhysicalObject {
-	constructor(){
-		this.xpos = 0; //xposition
-		this.ypos = 0; //yposition
-		this.rot = 0;  //rotation
-	}
-}
-
-class Ant extends PhysicalObject {
-	constructor(){
-		super();
-		this.heldItem = null; //references a PhysicalObject that it is holding
-		this.goal = ""; //current mind state
-	}
-	draw(){
+	tick(){
+		
+		{//First delete all the objects that are meant to be deleted
+			const nextObjects = [];
+			const nextAnts = [];
+			const nextLarvae = [];
+			const nextEggs = [];
+			const nextFoods = [];
+			const nextPheromones = [];
+			for (const object of this.objects){
+				if (!object.removeNextTick){
+					nextObjects.push(object);
+					switch (object.type){
+						case "Ant": {
+							nextAnts.push(object);
+							break;
+						}
+						case "Larva": {
+							nextLarvae.push(object);
+							break;
+						}
+						case "Egg": {
+							nextEggs.push(object);
+							break;
+						}
+						case "Food": {
+							nextFoods.push(object);
+							break;
+						}
+						case "Pheromone": {
+							nextPheromones.push(object);
+							break;
+						}
+					}
+				}
+			}
+			this.objects = nextObjects;
+			this.ants = nextAnts;
+			this.larvae = nextLarvae;
+			this.eggs = nextEggs;
+			this.foods = nextFoods;
+			this.pheromones = nextPheromones;
+		}
+		
+		const PM = (getNewTime() - this.timer.physics1) / 20;
+		this.timer.physics1 = getNewTime();
+		
+		for (let obj of this.objects){
+			//velocity
+			obj.xpos += obj.xvel * PM;
+			obj.ypos += obj.yvel * PM;
+			
+			//collision
+			{
+				const kindacenter = [Math.floor(obj.ypos / this.res), Math.floor(obj.xpos / this.res)];
+				
+				const baseX = kindacenter[1] * this.res;
+				const baseY = kindacenter[0] * this.res;
+		
+				const indexX = Math.max(0, Math.min(this.W - 2, kindacenter[1]));
+				const indexY = Math.max(0, Math.min(this.H - 2, kindacenter[0]));
+				
+				const offsetX = obj.xpos - baseX;
+				const offsetY = obj.ypos - baseY;
+				
+				//starting point
+				const condition = this.defineSurfaceEquations(indexY, indexX);
+				if (condition(offsetX, offsetY)){
+					obj.xpos -= obj.xvel;
+					obj.ypos -= obj.yvel;
+					obj.xvel = 0;
+					obj.yvel = 0;
+				}
+			
+			//gravity
+			obj.yvel += 1 * PM;
+			
+			//air resistance
+			obj.xvel *= 0.9;
+			obj.yvel *= 0.9;
+			
+			}
+		}
 		
 	}
 }
 
+class PhysicalObject {
+	constructor(marchingfield){
+		this.xpos = 0; //xposition
+		this.ypos = 0; //yposition
+		this.xvel = 0; //xvelocity
+		this.yvel = 0; //yvelocity
+		this.rot = 0;  //rotation
+		this.removeNextTick = false;
+		this.type = null;
+		this.marchingfield = marchingfield; //reference to the owner MarchingField
+	}
+}
+
+class AntLeg {
+	constructor(){
+		this.type = "AntLeg"; //do not add to MarchingField.objects[] 
+	}
+}
+
+class Ant extends PhysicalObject {
+	constructor(marchingfield){
+		super(marchingfield);
+		this.heldItem = null; //references a PhysicalObject that it is holding
+		this.goal = ""; //current mind state
+		this.type = "Ant";
+	}
+	draw(){
+		ctx.save();
+		
+		ctx.beginPath();
+		ctx.ellipse(this.xpos, this.ypos, 5, 5, 0, 0, 7);
+		ctx.fillStyle = "#000000";
+		ctx.fill();
+		ctx.closePath();
+		
+		ctx.restore();
+	}
+}
+
 const mf = new MarchingField();
+
+let albert = new Ant(mf);
+albert.xpos = 105;
+albert.ypos = 0;
+
+mf.ants.push(albert);
+mf.objects.push(albert);
 
 const mouse = {
 	xpos : 0,
@@ -278,6 +515,9 @@ canvas.addEventListener("mouseleave", function(){
 
 
 function mainloop(){
+	
+	mf.tick();
+	
 	if (mouse.down){
 		mf.addMaterial(mouse.xpos, mouse.ypos, 1.5);
 	}
